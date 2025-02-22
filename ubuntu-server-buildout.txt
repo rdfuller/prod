@@ -1,0 +1,157 @@
+#########################################
+# Configure the storage partitions
+
+# OPT and TMP, RAID1
+pvcreate /dev/md/appr1
+vgcreate vgapp /dev/md/appr1
+lvcreate -n lvopt -L 128G vgapp
+mkfs.xfs /dev/vgapp/lvopt
+mount /dev/mapper/vgapp-lvopt /opt
+
+# -> Note new version is using ramfs
+ lvcreate -n lvtmp -L 256G /dev/vgapp
+ mkfs.xfs /dev/mapper/vgapp-lvtmp
+ mount /dev/mapper/vgapp-lvtmp /tmp
+# Update /etc/fstab: tmpfs /tmp tmpfs defaults,noatime,nosuid,nodev,noexec,mode=1777,size=128G 0 0
+# Add the 128G stanza into the /etc/systemd/system/tmp.mount options
+#cp /usr/share/systemd/tmp.mount /etc/systemd/system/tmp.mount
+
+
+# backup and mirror
+pvcreate /dev/md/dbr6
+vgcreate vgdb /dev/md/dbr6
+lvcreate -n lv-dbops -L 11TB vgdb
+lvcreate -n lv-dbmir -L 10TB vgdb
+mkfs.xfs /dev/mapper/lv-dbops -b size=4k -f
+mkfs.ext4 /dev/mapper/lv-dbmir 
+
+# FSTAB
+/dev/vgapp/lvopt /opt xfs defaults 0 0
+#/dev/vgapp/lvtmp /tmp xfs defaults 0 0
+#tmpfs /tmp tmpfs defaults,noatime,nosuid,nodev,noexec,mode=1777,size=128G 0 0
+/dev/vgdb/lv-dbops /mnt/db xfs defaults 0 0
+/dev/vgdb/lv-dbmir /mnt/mirror ext4 defaults 0 0
+
+mdadm --detail --scan | tee -a /etc/mdadm/mdadm.conf
+update-initramfs -u
+
+#########################################
+
+# Install nmtui and other networking stuff
+apt-get install binutils
+
+# Or, permanently change the IP configuration in /etc/netplan/01-network-manager-all.yaml 
+# Warning: the prefix number of spaces for each line is important!
+
+# This file is generated from information provided by
+# the datasource.  Changes to it will not persist across an instance.
+# To disable cloud-init's network configuration capabilities, write a file
+# /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg with the following:
+# network: {config: disabled}
+network:
+  version: 2
+  renderer: networkd
+  ethernets:
+    enp0s3:
+     dhcp4: no
+     addresses: [192.168.1.233/24]
+     gateway4: 192.168.1.1
+     nameservers:
+       addresses: [8.8.8.8,8.8.4.4]
+
+# or:
+sudo vi /etc/netplan/00-installer-config.yaml
+# This is the network config written by 'subiquity'
+network:
+ ethernets:
+  enp0s2:
+     addresses:
+     - 192.168.100.110/24
+     dhcp4: false
+      routes:
+       - to: default
+         via: 192.168.100.1
+     nameservers:
+        addresses:
+          - 8.8.8.8
+          - 8.8.4.4
+  version: 2
+
+
+# After write of file:
+sudo netplan apply
+
+#########################################
+# Setup Cruz/Drew with ssh keys
+ssh-keygen -b 4096 -t rsa
+cp authorized_keys authorized_keys_Backup
+cat id_rsa.pub >> authorized_keys
+# To solve this, create a folder outside your home named /etc/ssh/<username> (replace "<username>" with your actual username). 
+# This directory should have 755 permissions and be owned by the user. Move the authorized_keys file into it. T
+# the authorized_keys file should have 644 permissions and be owned by the user.
+
+# Then edit your /etc/ssh/sshd_config and add:
+AuthorizedKeysFile    /etc/ssh/%u/authorized_keys
+# SSHD
+* Talk to drew about changing port...
+PermitRootLogin no
+MaxAuthTries 3
+LoginGraceTime 20
+AuthorizedKeysFile    /etc/ssh/%u/authorized_keys
+PubkeyAuthentication yes
+RSAAuthentication yes
+PasswordAuthentication no
+PermitEmptyPasswords no
+ChallengeResponseAuthentication no
+KerberosAuthentication no
+GSSAPIAuthentication no
+X11Forwarding no
+PermitUserEnvironment no
+AllowAgentForwarding no
+AllowTcpForwarding no
+PermitTunnel no
+DebianBanner no
+
+# -> Restart SSHD
+
+if Permission denied (publickey)
+If you're sure you've correctly configured sshd_config, copied your ID, and 
+have your private key in the .ssh directory, and still getting this error:
+
+Permission denied (publickey).
+
+Chances are, your /home/<user> or ~/.ssh/authorized_keys permissions are too 
+open by OpenSSH standards. You can get rid of this problem by issuing the following commands:
+chmod go-w ~/
+chmod 700 ~/.ssh
+chmod 600 ~/.ssh/authorized_keys
+#########################################
+
+
+# Cockpit/Podman
+apt-get install cockpit -y
+apt-get install cockpit-podman -y
+systemctl start cockpit
+systemctl enable cockpit
+ufw allow 9090
+ufw reload
+ufw status
+
+# OpenScap
+apt-get install libopenscap8 -y
+apt-get install curl -y
+apt-get install zip bzip2 -y
+apt-get install git -y
+wget https://security-metadata.canonical.com/oval/com.ubuntu.$(lsb_release -cs).usn.oval.xml.bz2
+
+
+#########################################
+# Login Banner:
+
+* * * * * * * * * * W A R N I N G * * * * * * * * * *
+This computer system is the property of RD Fuller. It is for authorized use only.  By using this system, all users acknowledge notice of, and agree to comply with, the RD Fuller’s Acceptable Use of Information Technology Resources Policy (“AUP”).  Unauthorized or improper use of this system may result in administrative disciplinary action, civil charges/criminal penalties, and/or other sanctions as set forth in the RD Fuller’s AUP. By continuing to use this system you indicate your awareness of and consent to these terms and conditions of use.
+
+LOG OFF IMMEDIATELY if you do not agree to the conditions stated in this warning.
+
+#########################################
+
